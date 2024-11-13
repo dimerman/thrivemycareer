@@ -25,6 +25,7 @@ end
 # their eligibility to receive emails based on both user and company email statuses.
 # It's initialized with an actual instance of Company based on the raw data's "company_id" value.
 class User
+  FILENAME = 'users.json'
   attr_accessor :id, :first_name, :last_name, :email, :company, :email_status, :active_status, :tokens
 
   def initialize(attrs = {})
@@ -52,6 +53,20 @@ class User
 
   def should_send_email?
     email_status && company.email_status
+  end
+
+  # Reads and parses the 'users.json' file, associating each user with their Company based on company_id.
+  # Returns a hash grouping User instances by their associated company's id.
+  # @return Hash[Integer, Array[User]]
+  def self.read_file(companies, filename: FILENAME)
+    ChallengeLogger.logger.info "Reading users file '#{filename}'."
+    file = File.read(filename)
+    data = JSON.parse(file)
+    users = data.map do |user_data|
+      user_data['company'] = companies.fetch(user_data.delete('company_id').to_i, nil)
+      User.new(user_data)
+    end
+    users.group_by { |user| user.company&.id }
   end
 
   private
@@ -100,6 +115,8 @@ end
 # a collection of users by handling their token top-ups and managing email notifications based on both user and
 # company email statuses.
 class Company
+  FILENAME = 'companies.json'
+
   attr_accessor :id, :name, :top_up, :email_status
 
   def initialize(attrs = {})
@@ -134,6 +151,23 @@ class Company
     end
   end
 
+  # Reads and parses the 'companies.json' file, creating a hash of Company objects keyed by their id.
+  # Raises an ArgumentError if duplicate company IDs are found during processing.
+  # @return Hash[Integer, Company]
+  def self.read_file(filename: FILENAME)
+    ChallengeLogger.logger.info "Reading companies file '#{filename}'."
+    file = File.read(filename)
+    data = JSON.parse(file)
+    companies = {}
+    data.each do |company_data|
+      company = Company.new(company_data)
+      raise ArgumentError, "Duplicate company id found: #{company.id}" if companies.key?(company.id)
+
+      companies[company.id] = company
+    end
+    companies
+  end
+
   private
 
   def process_user_group(users, label, output_file)
@@ -162,43 +196,12 @@ class Company
   end
 end
 
-# Reads and parses the 'companies.json' file, creating a hash of Company objects keyed by their id.
-# Raises an ArgumentError if duplicate company IDs are found during processing.
-# @return Hash[Integer, Company]
-def read_companies
-  ChallengeLogger.logger.info 'Reading companies file.'
-  file = File.read('companies.json')
-  data = JSON.parse(file)
-  companies = {}
-  data.each do |company_data|
-    company = Company.new(company_data)
-    raise ArgumentError, "Duplicate company id found: #{company.id}" if companies.key?(company.id)
-
-    companies[company.id] = company
-  end
-  companies
-end
-
-# Reads and parses the 'users.json' file, associating each user with their Company based on company_id.
-# Returns a hash grouping User instances by their associated company's id.
-# @return Hash[Integer, Array[User]]
-def read_users(companies)
-  ChallengeLogger.logger.info 'Reading users file.'
-  file = File.read('users.json')
-  data = JSON.parse(file)
-  users = data.map do |user_data|
-    user_data['company'] = companies.fetch(user_data.delete('company_id').to_i, nil)
-    User.new(user_data)
-  end
-  users.group_by { |user| user.company&.id }
-end
-
 # Executes the main challenge by loading companies and their associated users, processing each company's users,
 # and writing the results to 'output.txt'.
 # Logs the processing progress and handles any errors that occur during execution using ChallengeLogger.
 def challenge
-  companies = read_companies
-  grouped_users = read_users(companies)
+  companies = Company.read_file
+  grouped_users = User.read_file(companies)
 
   output_file = File.open('output.txt', 'w')
 
